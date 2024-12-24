@@ -2,87 +2,88 @@ from urllib.request import urlopen, Request
 from bs4 import BeautifulSoup
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import pandas as pd
-import matplotlib.pyplot as plt
+import time
 
-# Base URL for Finviz
-finviz_url = 'https://finviz.com/quote.ashx?t='
-tickers = ['RCL', 'CCL', 'NCLH']
+# Function to fetch news and calculate sentiment for a list of tickers
+def fetch_sentiment_for_tickers(tickers):
+    finviz_url = 'https://finviz.com/quote.ashx?t='
+    news_tables = {}
+    parsed_data = []
 
-news_tables = {}
+    # Fetch news tables for each ticker
+    for ticker in tickers:
+        try:
+            url = finviz_url + ticker
+            req = Request(url=url, headers={'User-Agent': 'my-app'})
+            response = urlopen(req)
 
-# Fetch and parse the news table for each ticker
-for ticker in tickers:
-    url = finviz_url + ticker
+            html = BeautifulSoup(response, 'html.parser')
+            news_table = html.find(id='news-table')
+            news_tables[ticker] = news_table
 
-    # Request the page
-    req = Request(url=url, headers={'User-Agent': 'my-app'})
-    response = urlopen(req)
+            # Parse news titles and dates
+            if news_table:
+                for row in news_table.findAll('tr'):
+                    try:
+                        # Extract news title and date/time
+                        link_tag = row.find('a')
+                        if not link_tag:
+                            continue
+                        title = link_tag.text.strip()
+                        date_data = row.td.text.strip().split(' ')
+                        if len(date_data) == 1:
+                            news_time = date_data[0]  # Rename to avoid shadowing the `time` module
+                            date = None
+                        else:
+                            date = date_data[0]
+                            news_time = date_data[1]
 
-    # Parse the HTML response with BeautifulSoup
-    html = BeautifulSoup(response, 'html.parser')  # Explicitly specify the parser
+                        parsed_data.append([ticker, date, news_time, title])
+                    except AttributeError:
+                        continue
+        except Exception as e:
+            print(f"Error fetching data for {ticker}: {e}")
 
-    # Find the news table by ID
-    news_table = html.find(id='news-table')
-    news_tables[ticker] = news_table
+        # Delay to avoid being rate-limited
+        time.sleep(1)
 
-parsed_data = []
+    # Create a DataFrame
+    df = pd.DataFrame(parsed_data, columns=['ticker', 'date', 'time', 'title'])
 
-# Process the extracted news tables
-for ticker, news_table in news_tables.items():
-    if news_table:  # Ensure the table exists
-        for row in news_table.findAll('tr'):
-            try:
-                # Get the <a> tag and its text
-                link_tag = row.find('a')
-                if not link_tag:  # Skip rows without a title link
-                    continue
-                title = link_tag.text.strip()  # Strip extra whitespace
+    # Sentiment Analysis
+    vader = SentimentIntensityAnalyzer()
+    df['compound'] = df['title'].apply(lambda title: vader.polarity_scores(title)['compound'])
 
-                # Extract the date and time
-                date_data = row.td.text.strip().split(' ')  # Clean and split date/time
-                if len(date_data) == 1:
-                    time = date_data[0]
-                    date = None  # If only time is available
-                else:
-                    date = date_data[0]
-                    time = date_data[1]
+    # Group by ticker and calculate mean sentiment
+    sentiment_df = df.groupby('ticker')['compound'].mean().reset_index()
+    return sentiment_df
 
-                # Append the parsed data
-                parsed_data.append([ticker, date, time, title])
-            except AttributeError:
-                # Safely skip rows missing required elements
-                continue
+# Function to process stocks in batches
+def process_stocks_in_batches(all_tickers, batch_size=10, sentiment_threshold=0.5):
+    high_sentiment_stocks = []
 
-# Create a DataFrame
-df = pd.DataFrame(parsed_data, columns=['ticker', 'date', 'time', 'title'])
+    # Process tickers in batches
+    for i in range(0, len(all_tickers), batch_size):
+        batch = all_tickers[i:i+batch_size]
+        sentiment_df = fetch_sentiment_for_tickers(batch)
 
-# Sentiment Analysis
-vader = SentimentIntensityAnalyzer()
-df['compound'] = df['title'].apply(lambda title: vader.polarity_scores(title)['compound'])
+        # Filter stocks with sentiment above the threshold
+        filtered_df = sentiment_df[sentiment_df['compound'] > sentiment_threshold]
+        high_sentiment_stocks.append(filtered_df)
 
-# Convert `date` column to datetime and drop invalid rows
-df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
-df = df.dropna(subset=['date'])  # Remove rows where `date` is NaT (invalid date)
+    # Combine results from all batches
+    result_df = pd.concat(high_sentiment_stocks, ignore_index=True)
+    return result_df
 
-# Group by ticker and date, and calculate the mean compound sentiment
-mean_df = df.groupby(['ticker', 'date'])[['compound']].mean().reset_index()
+# List of stocks to analyze (replace this with your list or an API call to fetch tickers)
+all_tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NFLX', 'META', 'NVDA', 'INTC', 'AMD', 'RCL', 'CCL', 'NCLH']
 
-# Pivot the DataFrame for plotting
-pivot_df = mean_df.pivot(index='date', columns='ticker', values='compound')
+# Analyze stocks in batches and find those with high sentiment
+high_sentiment_stocks = process_stocks_in_batches(all_tickers, batch_size=5, sentiment_threshold=0.2)
 
-# Plot the results
-pivot_df.plot(kind='bar', figsize=(14, 8), legend=True, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
-plt.title("Mean Sentiment Scores Over Time by Stock", fontsize=16)
-plt.xlabel("Date", fontsize=12)
-plt.ylabel("Mean Sentiment (Compound Score)", fontsize=12)
-plt.xticks(rotation=45, fontsize=10)
-plt.legend(title="Ticker", fontsize=10)
-plt.grid(axis='y', linestyle='--', alpha=0.7)
-plt.tight_layout()
+# Display the results
+print("Stocks with High Sentiment:")
+print(high_sentiment_stocks)
 
-# Annotate highest and lowest points
-for ticker in pivot_df.columns:
-    for date, value in pivot_df[ticker].dropna().items():
-        plt.text(pivot_df.index.get_loc(date), value, f'{value:.2f}', ha='center', va='bottom' if value > 0 else 'top')
-
-plt.show()
+# Save results to a CSV file
+high_sentiment_stocks.to_csv("high_sentiment_stocks.csv", index=False)
