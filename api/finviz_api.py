@@ -1,5 +1,7 @@
 from urllib.request import urlopen, Request
 from bs4 import BeautifulSoup
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import pandas as pd
 
 # Base URL for Finviz
 finviz_url = 'https://finviz.com/quote.ashx?t='
@@ -53,5 +55,10 @@ for ticker, news_table in news_tables.items():
                 # Safely skip rows missing required elements
                 continue
 
-# Print the parsed data
-print(parsed_data)
+df = pd.DataFrame(parsed_data, columns=['ticker', 'date', 'time', 'title'])
+
+
+vader = SentimentIntensityAnalyzer()
+
+
+
