@@ -2,10 +2,11 @@ from urllib.request import urlopen, Request
 from bs4 import BeautifulSoup
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # Base URL for Finviz
 finviz_url = 'https://finviz.com/quote.ashx?t='
-tickers = ['AMZN', 'AMD', 'MSTR']
+tickers = ['RCL', 'CCL', 'NCLH']
 
 news_tables = {}
 
@@ -23,9 +24,6 @@ for ticker in tickers:
     # Find the news table by ID
     news_table = html.find(id='news-table')
     news_tables[ticker] = news_table
-
-    # Debugging: Limit to one ticker for now
-    break
 
 parsed_data = []
 
@@ -55,10 +53,36 @@ for ticker, news_table in news_tables.items():
                 # Safely skip rows missing required elements
                 continue
 
+# Create a DataFrame
 df = pd.DataFrame(parsed_data, columns=['ticker', 'date', 'time', 'title'])
 
-
+# Sentiment Analysis
 vader = SentimentIntensityAnalyzer()
+df['compound'] = df['title'].apply(lambda title: vader.polarity_scores(title)['compound'])
 
+# Convert `date` column to datetime and drop invalid rows
+df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
+df = df.dropna(subset=['date'])  # Remove rows where `date` is NaT (invalid date)
 
+# Group by ticker and date, and calculate the mean compound sentiment
+mean_df = df.groupby(['ticker', 'date'])[['compound']].mean().reset_index()
 
+# Pivot the DataFrame for plotting
+pivot_df = mean_df.pivot(index='date', columns='ticker', values='compound')
+
+# Plot the results
+pivot_df.plot(kind='bar', figsize=(14, 8), legend=True, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
+plt.title("Mean Sentiment Scores Over Time by Stock", fontsize=16)
+plt.xlabel("Date", fontsize=12)
+plt.ylabel("Mean Sentiment (Compound Score)", fontsize=12)
+plt.xticks(rotation=45, fontsize=10)
+plt.legend(title="Ticker", fontsize=10)
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.tight_layout()
+
+# Annotate highest and lowest points
+for ticker in pivot_df.columns:
+    for date, value in pivot_df[ticker].dropna().items():
+        plt.text(pivot_df.index.get_loc(date), value, f'{value:.2f}', ha='center', va='bottom' if value > 0 else 'top')
+
+plt.show()
